@@ -97,7 +97,7 @@ with st.sidebar.expander("📋 현재 금지 키워드 목록 관리", expanded=
             st.session_state.forbidden_list.remove(kw)
         st.rerun()
 
-# --- 이미지 압축 함수 (용량 축소 및 화질 최적화) ---
+# --- 이미지 압축 함수 ---
 def optimize_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     img.thumbnail((800, 800))
@@ -107,7 +107,7 @@ def optimize_image(image_bytes):
     img.save(buffer, format="JPEG", quality=75)
     return buffer.getvalue()
 
-# --- Gemini 단건 분석 함수 (503 서버 과부하 자동 재시도 로직 포함) ---
+# --- Gemini 단건 분석 함수 ---
 def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
     optimized_bytes = optimize_image(image_bytes)
     client = genai.Client(api_key=api_key)
@@ -166,27 +166,4 @@ with tab1:
     st.subheader("아이패드 / PC 파일 대량 업로드 (순차 안전 처리)")
     
     uploaded_files = st.file_uploader(
-        "일러스트/요소 이미지들을 여러 장 선택해 주세요 (PNG, JPG)", 
-        type=["png", "jpg", "jpeg"], 
-        accept_multiple_files=True
-    )
-
-    if uploaded_files:
-        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (화질 최적화 및 순차 처리)")
-        
-        if st.button("✨ 키워드 자동 추출 및 시트 저장", type="primary"):
-            try:
-                gemini_api_key = st.secrets["GEMINI_API_KEY"]
-            except Exception:
-                gemini_api_key = None
-                
-            if not gemini_api_key:
-                st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다.")
-            else:
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                current_forbidden = st.session_state.forbidden_list
-                
-                results_container = []
-                
-                for idx, file in enumerate(
+        "일러스트/
