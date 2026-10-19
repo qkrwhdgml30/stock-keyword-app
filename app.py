@@ -113,18 +113,16 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
     client = genai.Client(api_key=api_key)
     image = Image.open(io.BytesIO(optimized_bytes))
     
-    prompt = f"""
-    이 이미지의 시각적 요소, 객체, 상황, 인물, 색상, 분위기 등 '요소 본연의 핵심 키워드'만 한국어로 추출해줘.
-    1. 첫 번째 줄에는 미리캔버스용 핵심 키워드를 쉼표(,)로 구분하여 정확히 25개 적어줘.
-    2. 두 번째 줄에는 크라우드픽용 핵심 키워드를 쉼표(,)로 구분하여 정확히 40개 적어줘.
-    다른 설명이나 번호는 절대 붙이지 말고 오직 아래 두 줄 형식으로만 출력해줘:
-    미리캔버스: [키워드들...]
-    크라우드픽: [키워드들...]
-
-    [절대 포함하지 말아야 할 금지 키워드 리스트]:
-    {', '.join(forbidden_words)}
-    위 금지 단어들과 유사한 포괄적/제작방식/마케팅성 단어는 반드시 완전히 제외해줘.
-    """
+    prompt = (
+        "이 이미지의 시각적 요소, 객체, 상황, 인물, 색상, 분위기 등 '요소 본연의 핵심 키워드'만 한국어로 추출해줘.\n"
+        "1. 첫 번째 줄에는 미리캔버스용 핵심 키워드를 쉼표(,)로 구분하여 정확히 25개 적어줘.\n"
+        "2. 두 번째 줄에는 크라우드픽용 핵심 키워드를 쉼표(,)로 구분하여 정확히 40개 적어줘.\n"
+        "다른 설명이나 번호는 절대 붙이지 말고 오직 아래 두 줄 형식으로만 출력해줘:\n"
+        "미리캔버스: [키워드들...]\n"
+        "크라우드픽: [키워드들...]\n\n"
+        f"[절대 포함하지 말아야 할 금지 키워드 리스트]:\n{', '.join(forbidden_words)}\n"
+        "위 금지 단어들과 유사한 포괄적/제작방식/마케팅성 단어는 반드시 완전히 제외해줘."
+    )
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -152,4 +150,43 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
                 "name": file_name,
                 "bytes": optimized_bytes,
                 "miricanvas": filter_text(m_kw_str) if m_kw_str else filter_text(text_res),
-                "
+                "crowdpic": filter_text(c_kw_str) if c_kw_str else filter_text(text_res)
+            }
+        except Exception as e:
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                if attempt < max_retries - 1:
+                    time.sleep(3.0)
+                    continue
+            return {"name": file_name, "error": str(e)}
+
+# --- 메인 탭 구성 ---
+tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (사이즈 통일)"])
+
+with tab1:
+    st.subheader("아이패드 / PC 파일 대량 업로드 (순차 안전 처리)")
+    
+    uploaded_files = st.file_uploader(
+        "일러스트/요소 이미지들을 여러 장 선택해 주세요 (PNG, JPG)", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (화질 최적화 및 순차 처리)")
+        
+        if st.button("✨ 키워드 자동 추출 및 시트 저장", type="primary"):
+            try:
+                gemini_api_key = st.secrets["GEMINI_API_KEY"]
+            except Exception:
+                gemini_api_key = None
+                
+            if not gemini_api_key:
+                st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다.")
+            else:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                current_forbidden = st.session_state.forbidden_list
+                
+                results_container = []
+                
+                for idx, file in enumerate(
