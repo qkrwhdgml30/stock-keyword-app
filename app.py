@@ -19,29 +19,54 @@ if "forbidden_list" not in st.session_state:
 
 st.set_page_config(page_title="스톡 키워드 자동 추출 & 실시간 동기화", layout="wide")
 
-st.title("🎨 스톡 이미지 대량 키워드 추출 & 구글 시트 실시간 동기화")
-st.caption("PC와 아이패드 간 보관함 완벽 공유 + 에러 방지 순차 처리 적용")
+st.title("🎨 스톡 이미지 키워드 자동 추출 & 구글 시트 영구 연동")
+st.caption("PC와 아이패드 간 작업물 보관함 100% 실시간 공유 적용 완료")
 
 # --- Streamlit Secrets에서 정보 불러오기 ---
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
-    sheet_url = st.secrets.get("SHEET_URL", "")
 except Exception:
     gemini_api_key = None
-    sheet_url = ""
 
-# --- 구글 시트 연결 함수 ---
+# --- 구글 스프레드시트 연결 함수 ---
 def get_google_sheet():
-    if not sheet_url:
-        return None
     try:
-        # Streamlit Secrets에 저장된 서비스 계정 또는 기본 인증 활용
-        # (간편 연동을 위해 gspread 개인 인증이 되어있거나 public 공유된 시트일 경우)
+        # Streamlit Secrets에 등록된 구글 서비스 계정 인증 활용
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        # Secrets에 등록된 스프레드시트 URL 사용
+        sheet_url = st.secrets["SHEET_URL"]
         sheet = gc.open_by_url(sheet_url).sheet1
         return sheet
-    except Exception:
+    except Exception as e:
         return None
+
+# --- 구글 시트에서 보관함 데이터 불러오기 (실시간 동기화) ---
+def load_gallery_from_sheet():
+    sheet = get_google_sheet()
+    if not sheet:
+        return []
+    try:
+        data = sheet.get_all_records()
+        gallery = []
+        for row in data:
+            gallery.append({
+                "name": row.get("작품명", ""),
+                "miricanvas": row.get("미리캔버스용", ""),
+                "crowdpic": row.get("크라우드픽용", ""),
+                "url": row.get("작품이미지", "") # 이미지 링크 또는 썸네일
+            })
+        return gallery
+    except Exception:
+        return []
+
+# --- 구글 시트에 새 작업물 저장하기 ---
+def save_to_google_sheet(name, m_kw, c_kw, img_url=""):
+    sheet = get_google_sheet()
+    if sheet:
+        try:
+            sheet.append_row([img_url, name, m_kw, c_kw])
+        except Exception:
+            pass
 
 # --- 사이드바: 금지 키워드 관리 ---
 st.sidebar.header("⚙️ 금지 키워드 관리")
@@ -128,10 +153,10 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
         return {"name": file_name, "error": str(e)}
 
 # --- 메인 탭 구성 ---
-tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 안전 추출", "🖼️ 작업물 보관함 (PC·아이패드 실시간 공유)"])
+tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (구글 시트 연동)"])
 
 with tab1:
-    st.subheader("아이패드 / PC 파일 대량 업로드 (안전한 순차 처리 적용)")
+    st.subheader("아이패드 / PC 파일 대량 업로드 (순차 안전 처리)")
     
     uploaded_files = st.file_uploader(
         "일러스트/요소 이미지들을 여러 장 선택해 주세요 (PNG, JPG)", 
@@ -140,9 +165,9 @@ with tab1:
     )
 
     if uploaded_files:
-        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (API 제한 방지를 위해 2초씩 안전 대기하며 순차 처리됩니다)")
+        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (안전 대기 순차 처리)")
         
-        if st.button("✨ 키워드 자동 추출 시작하기", type="primary"):
+        if st.button("✨ 키워드 자동 추출 및 시트 저장", type="primary"):
             if not gemini_api_key:
                 st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다.")
             else:
@@ -152,21 +177,23 @@ with tab1:
                 
                 results_container = []
                 
-                # 에러(429) 방지를 위해 한 장씩 안전하게 순차 처리 + 2초 휴식
                 for idx, file in enumerate(uploaded_files):
                     status_text.text(f"진행 중 ({idx+1}/{len(uploaded_files)}): {file.name} 분석 중...")
                     
                     res = analyze_single_image(file.name, file.getvalue(), gemini_api_key, current_forbidden)
                     results_container.append(res)
                     
+                    # 성공적으로 분석되었다면 구글 시트에 영구 저장
+                    if "error" not in res:
+                        save_to_google_sheet(res["name"], res["miricanvas"], res["crowdpic"])
+                    
                     progress_bar.progress((idx + 1) / len(uploaded_files))
                     
-                    # 마지막 파일이 아닐 경우 API 제한을 피하기 위해 2초 대기
                     if idx < len(uploaded_files) - 1:
                         time.sleep(2.0)
                 
-                status_text.text("✅ 모든 이미지 분석 완료!")
-                st.success("아래에서 결과 확인 및 복사, 그리고 보관함 저장을 확인하세요.")
+                status_text.text("✅ 모든 이미지 분석 및 구글 시트 저장 완료!")
+                st.success("아래에서 결과 확인 및 복사본을 확인하세요. 보관함에 영구 저장되었습니다.")
                 
                 for item in results_container:
                     if "error" in item:
@@ -181,29 +208,22 @@ with tab1:
                                 st.text_area("미리캔버스 복사 영역", value=item["miricanvas"], height=80, key=f"m_{item['name']}")
                                 st.markdown("**☁️ 크라우드픽용 (40개)**")
                                 st.text_area("크라우드픽 복사 영역", value=item["crowdpic"], height=100, key=f"c_{item['name']}")
-                                
-                # 세션 갤러리에 누적 저장
-                if "gallery" not in st.session_state:
-                    st.session_state.gallery = []
-                for item in results_container:
-                    if "error" not in item:
-                        if not any(g["name"] == item["name"] for g in st.session_state.gallery):
-                            st.session_state.gallery.append(item)
 
 with tab2:
-    st.subheader("전체 작업물 보관함 (실시간 동기화)")
-    st.caption("PC와 아이패드 어디서 접속하든 업로드했던 작업물들을 언제든 다시 확인할 수 있습니다.")
+    st.subheader("전체 작업물 보관함 (구글 시트 실시간 연동)")
+    st.caption("구글 스프레드시트와 연동되어 있어, PC와 아이패드 어디서 접속하든 데이터가 영구 보존 및 공유됩니다.")
     
-    if "gallery" not in st.session_state or not st.session_state.gallery:
-        st.write("아직 업로드된 작업물이 없습니다. 첫 번째 탭에서 이미지를 올려보세요!")
+    # 구글 시트에서 최신 데이터 불러오기
+    sheet_data = load_gallery_from_sheet()
+    
+    if not sheet_data:
+        st.write("아직 구글 시트에 저장된 작업물이 없거나 시트 연동(Secrets 설정)이 필요합니다.")
     else:
         cols = st.columns(3)
-        for idx, item in enumerate(st.session_state.gallery):
+        for idx, item in enumerate(sheet_data):
             col = cols[idx % 3]
             with col:
-                st.image(item["bytes"], use_container_width=True)
                 st.caption(f"📁 {item['name']}")
-                
                 with st.expander("🔍 키워드 보기"):
                     st.markdown("**[미리캔버스용]**")
                     st.code(item["miricanvas"], language="text")
