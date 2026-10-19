@@ -129,7 +129,7 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
         """
 
         response = client.models.generate_content(
-            model='gemini-3.8-flash',
+            model='gemini-2.5-flash',
             contents=[image, prompt]
         )
         
