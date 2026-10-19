@@ -19,28 +19,31 @@ if "forbidden_list" not in st.session_state:
 
 st.set_page_config(page_title="스톡 키워드 자동 추출 & 실시간 동기화", layout="wide")
 
-st.title("🎨 스톡 이미지 키워드 자동 추출 & 구글 시트 영구 연동")
-st.caption("PC와 아이패드 간 작업물 보관함 100% 실시간 공유 적용 완료")
+# --- UI 스타일 추가 (보관함 썸네일 카드 크기 고정) ---
+st.markdown("""
+    <style>
+    .stImage img {
+        height: 180px !important;
+        object-fit: cover !important;
+        border-radius: 8px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- Streamlit Secrets에서 정보 불러오기 ---
-try:
-    gemini_api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    gemini_api_key = None
+st.title("🎨 스톡 이미지 키워드 자동 추출 & 구글 시트 영구 연동")
+st.caption("썸네일 사이즈 통일 + 고속 압축 + PC/아이패드 실시간 동기화 적용 완료")
 
 # --- 구글 스프레드시트 연결 함수 ---
 def get_google_sheet():
     try:
-        # Streamlit Secrets에 등록된 구글 서비스 계정 인증 활용
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-        # Secrets에 등록된 스프레드시트 URL 사용
         sheet_url = st.secrets["SHEET_URL"]
         sheet = gc.open_by_url(sheet_url).sheet1
         return sheet
-    except Exception as e:
+    except Exception:
         return None
 
-# --- 구글 시트에서 보관함 데이터 불러오기 (실시간 동기화) ---
+# --- 구글 시트에서 보관함 데이터 불러오기 ---
 def load_gallery_from_sheet():
     sheet = get_google_sheet()
     if not sheet:
@@ -53,7 +56,7 @@ def load_gallery_from_sheet():
                 "name": row.get("작품명", ""),
                 "miricanvas": row.get("미리캔버스용", ""),
                 "crowdpic": row.get("크라우드픽용", ""),
-                "url": row.get("작품이미지", "") # 이미지 링크 또는 썸네일
+                "url": row.get("작품이미지", "")
             })
         return gallery
     except Exception:
@@ -94,14 +97,15 @@ with st.sidebar.expander("📋 현재 금지 키워드 목록 관리", expanded=
             st.session_state.forbidden_list.remove(kw)
         st.rerun()
 
-# --- 이미지 압축 함수 ---
+# --- 이미지 압축 함수 (용량 축소 및 화질 최적화) ---
 def optimize_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     img.thumbnail((800, 800))
     buffer = io.BytesIO()
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
-    img.save(buffer, format="JPEG", quality=85)
+    # 스톡 제출용이 아니므로 용량을 줄이기 위해 화질(quality)을 75로 설정하여 가볍게 압축
+    img.save(buffer, format="JPEG", quality=75)
     return buffer.getvalue()
 
 # --- Gemini 단건 분석 함수 ---
@@ -145,7 +149,7 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
 
         return {
             "name": file_name,
-            "bytes": image_bytes,
+            "bytes": optimized_bytes, # 최적화된 가벼운 이미지 사용
             "miricanvas": filter_text(m_kw_str) if m_kw_str else filter_text(text_res),
             "crowdpic": filter_text(c_kw_str) if c_kw_str else filter_text(text_res)
         }
@@ -153,7 +157,7 @@ def analyze_single_image(file_name, image_bytes, api_key, forbidden_words):
         return {"name": file_name, "error": str(e)}
 
 # --- 메인 탭 구성 ---
-tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (구글 시트 연동)"])
+tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (사이즈 통일)"])
 
 with tab1:
     st.subheader("아이패드 / PC 파일 대량 업로드 (순차 안전 처리)")
@@ -165,9 +169,14 @@ with tab1:
     )
 
     if uploaded_files:
-        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (안전 대기 순차 처리)")
+        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다. (화질 최적화 및 순차 처리)")
         
         if st.button("✨ 키워드 자동 추출 및 시트 저장", type="primary"):
+            try:
+                gemini_api_key = st.secrets["GEMINI_API_KEY"]
+            except Exception:
+                gemini_api_key = None
+                
             if not gemini_api_key:
                 st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다.")
             else:
@@ -183,7 +192,6 @@ with tab1:
                     res = analyze_single_image(file.name, file.getvalue(), gemini_api_key, current_forbidden)
                     results_container.append(res)
                     
-                    # 성공적으로 분석되었다면 구글 시트에 영구 저장
                     if "error" not in res:
                         save_to_google_sheet(res["name"], res["miricanvas"], res["crowdpic"])
                     
@@ -193,7 +201,7 @@ with tab1:
                         time.sleep(2.0)
                 
                 status_text.text("✅ 모든 이미지 분석 및 구글 시트 저장 완료!")
-                st.success("아래에서 결과 확인 및 복사본을 확인하세요. 보관함에 영구 저장되었습니다.")
+                st.success("결과가 보관함에 영구 저장되었습니다.")
                 
                 for item in results_container:
                     if "error" in item:
@@ -210,20 +218,23 @@ with tab1:
                                 st.text_area("크라우드픽 복사 영역", value=item["crowdpic"], height=100, key=f"c_{item['name']}")
 
 with tab2:
-    st.subheader("전체 작업물 보관함 (구글 시트 실시간 연동)")
-    st.caption("구글 스프레드시트와 연동되어 있어, PC와 아이패드 어디서 접속하든 데이터가 영구 보존 및 공유됩니다.")
+    st.subheader("전체 작업물 보관함 (사이즈 통일 갤러리)")
+    st.caption("모든 이미지 카드의 높이와 비율이 일정하게 통일되어 보기 편하도록 정렬됩니다.")
     
-    # 구글 시트에서 최신 데이터 불러오기
     sheet_data = load_gallery_from_sheet()
     
     if not sheet_data:
-        st.write("아직 구글 시트에 저장된 작업물이 없거나 시트 연동(Secrets 설정)이 필요합니다.")
+        st.write("아직 구글 시트에 저장된 작업물이 없습니다.")
     else:
         cols = st.columns(3)
         for idx, item in enumerate(sheet_data):
             col = cols[idx % 3]
             with col:
                 st.caption(f"📁 {item['name']}")
+                # 만약 시트에 이미지가 등록되어 있다면 썸네일 표시, 없으면 텍스트 카드 형태로 표시
+                if item["url"]:
+                    st.image(item["url"], use_container_width=True)
+                
                 with st.expander("🔍 키워드 보기"):
                     st.markdown("**[미리캔버스용]**")
                     st.code(item["miricanvas"], language="text")
