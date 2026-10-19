@@ -3,9 +3,6 @@ import io
 import streamlit as st
 from PIL import Image
 from google import genai
-import gspread
-import pandas as pd
-import json
 
 # --- 기본 금지 키워드 초기값 설정 ---
 DEFAULT_FORBIDDEN = [
@@ -17,12 +14,15 @@ DEFAULT_FORBIDDEN = [
 if "forbidden_list" not in st.session_state:
     st.session_state.forbidden_list = DEFAULT_FORBIDDEN.copy()
 
+if "gallery" not in st.session_state:
+    st.session_state.gallery = []
+
 st.set_page_config(page_title="스톡 키워드 자동 추출 & 대량 관리", layout="wide")
 
-st.title("🎨 스톡 이미지 대량 키워드 자동 추출 & 실시간 동기화")
-st.caption("미리캔버스(25개) / 크라우드픽(40개) 맞춤 추출 + 구글 시트 연동으로 PC/아이패드 데이터 공유")
+st.title("🎨 스톡 이미지 대량 키워드 자동 추출 & 관리")
+st.caption("미리캔버스(25개) / 크라우드픽(40개) 맞춤 추출 + 금지 키워드 필터링 적용")
 
-# --- Streamlit Secrets에서 API 키 및 구글 연동 불러오기 ---
+# --- Streamlit Secrets에서 API 키 불러오기 ---
 try:
     gemini_api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
@@ -80,12 +80,11 @@ def analyze_image(image_bytes, api_key, count, forbidden_words):
     return ", ".join(filtered_list)
 
 # --- 메인 탭 구성 ---
-tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (PC·아이패드 실시간 동기화)"])
+tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (갤러리)"])
 
 with tab1:
     st.subheader("아이패드 / PC 파일 대량 업로드 (한 번에 15개 이상 가능)")
     
-    # accept_multiple_files=True 로 여러 장 동시 선택 가능
     uploaded_files = st.file_uploader(
         "일러스트/요소 이미지들을 여러 장 선택해 주세요 (PNG, JPG)", 
         type=["png", "jpg", "jpeg"], 
@@ -93,7 +92,7 @@ with tab1:
     )
 
     if uploaded_files:
-        st.info(f"📁 총 {len스의_파일수 := len(uploaded_files)}개의 파일이 선택되었습니다.")
+        st.info(f"📁 총 {len(uploaded_files)}개의 파일이 선택되었습니다.")
         
         if st.button("✨ 선택한 이미지 전체 키워드 자동 추출하기", type="primary"):
             if not gemini_api_key:
@@ -127,7 +126,6 @@ with tab1:
                 status_text.text("✅ 모든 이미지 분석 완료!")
                 st.success("아래에서 결과 확인 및 복사, 그리고 보관함 저장을 확인하세요.")
                 
-                # 결과 일괄 출력
                 for item in results_container:
                     with st.expander(f"📁 파일명: {item['name']}", expanded=True):
                         col_img, col_txt = st.columns([1, 2])
@@ -135,23 +133,19 @@ with tab1:
                             st.image(item["bytes"], use_container_width=True)
                         with col_txt:
                             st.markdown("**🎨 미리캔버스용 (25개)**")
-                            st.text_area("m_box", value=item["miricanvas"], height=80, key=f"m_{item['name']}")
+                            st.text_area("미리캔버스 복사 영역", value=item["miricanvas"], height=80, key=f"m_{item['name']}")
                             st.markdown("**☁️ 크라우드픽용 (40개)**")
-                            st.text_area("c_box", value=item["crowdpic"], height=100, key=f"c_{item['name']}")
+                            st.text_area("크라우드픽 복사 영역", value=item["crowdpic"], height=100, key=f"c_{item['name']}")
                             
-                # 세션 갤러리에 누적 저장
-                if "gallery" not in st.session_state:
-                    st.session_state.gallery = []
                 for item in results_container:
-                    # 중복 방지 추가
                     if not any(g["name"] == item["name"] for g in st.session_state.gallery):
                         st.session_state.gallery.append(item)
 
 with tab2:
     st.subheader("전체 작업물 보관함")
-    st.caption("PC와 아이패드 어디서 접속하든 업로드했던 작업물들을 언제든 다시 확인할 수 있습니다.")
+    st.caption("업로드했던 작업물들을 언제든 다시 확인할 수 있습니다.")
     
-    if "gallery" not in st.session_state or not st.session_state.gallery:
+    if not st.session_state.gallery:
         st.write("아직 업로드된 작업물이 없습니다. 첫 번째 탭에서 이미지를 올려보세요!")
     else:
         cols = st.columns(3)
