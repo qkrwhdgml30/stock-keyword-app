@@ -1,9 +1,9 @@
 import os
 import io
-import json
-import base64
 import streamlit as st
-import openai
+from PIL import Image
+from google import genai
+from google.genai import types
 
 # --- 설정 및 금지 키워드 목록 정의 ---
 FORBIDDEN_KEYWORDS = [
@@ -18,18 +18,18 @@ FORBIDDEN_KEYWORDS = [
 if "gallery" not in st.session_state:
     st.session_state.gallery = []
 
-st.set_page_config(page_title="스톡 키워드 자동 추출기", layout="wide")
+st.set_page_config(page_title="스톡 키워드 자동 추출기 (무료버전)", layout="wide")
 
-st.title("🎨 스톡 이미지 키워드 자동 추출 & 관리")
-st.caption("미리캔버스 / 크라우드픽 심사 거절 방지 (금지 키워드 자동 필터링 적용)")
+st.title("🎨 스톡 이미지 키워드 자동 추출 & 관리 (무료)")
+st.caption("미리캔버스 / 크라우드픽 심사 거절 방지 (Gemini 무료 API 적용)")
 
 # 사이드바: API 키 입력
-api_key_input = st.sidebar.text_input("OpenAI API Key 입력", type="password")
+api_key_input = st.sidebar.text_input("Google Gemini API Key 입력", type="password")
 
-# --- 이미지 분석 함수 ---
+# --- Gemini 이미지 분석 함수 ---
 def analyze_image_and_extract_keywords(image_bytes, api_key):
-    client = openai.OpenAI(api_key=api_key)
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    client = genai.Client(api_key=api_key)
+    image = Image.open(io.BytesIO(image_bytes))
     
     prompt = f"""
     이 이미지의 시각적 요소, 객체, 상황, 인물, 색상, 분위기 등 '요소 본연의 핵심 키워드'만 한국어로 20~30개 추출해줘.
@@ -40,24 +40,12 @@ def analyze_image_and_extract_keywords(image_bytes, api_key):
     위 금지 단어들과 유사한 포괄적/제작방식/마케팅성 단어는 반드시 완전히 제외하고 오직 그림 속 객체와 상황 자체만 키워드로 뽑아줘.
     """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                    }
-                ]
-            }
-        ],
-        max_tokens=300
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=[image, prompt]
     )
     
-    raw_keywords = response.choices[0].message.content.strip()
+    raw_keywords = response.text.strip()
     
     # Python 단에서 한번 더 금지어 2차 강력 검증 및 필터링
     keyword_list = [k.strip() for k in raw_keywords.replace("\n", "").split(",") if k.strip()]
@@ -80,9 +68,9 @@ with tab1:
         
         if st.button("✨ 키워드 자동 추출하기", type="primary"):
             if not api_key_input:
-                st.error("좌측 사이드바에 OpenAI API Key를 입력해주세요!")
+                st.error("좌측 사이드바에 Google Gemini API Key를 입력해주세요!")
             else:
-                with st.spinner("AI가 금지 키워드를 걸러내고 키워드를 추출 중입니다..."):
+                with st.spinner("Gemini AI가 금지 키워드를 걸러내고 키워드를 추출 중입니다..."):
                     img_bytes = uploaded_file.getvalue()
                     try:
                         result_keywords = analyze_image_and_extract_keywords(img_bytes, api_key_input)
