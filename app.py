@@ -3,6 +3,9 @@ import io
 import streamlit as st
 from PIL import Image
 from google import genai
+import gspread
+import pandas as pd
+import json
 
 # --- 기본 금지 키워드 초기값 설정 ---
 DEFAULT_FORBIDDEN = [
@@ -14,21 +17,18 @@ DEFAULT_FORBIDDEN = [
 if "forbidden_list" not in st.session_state:
     st.session_state.forbidden_list = DEFAULT_FORBIDDEN.copy()
 
-if "gallery" not in st.session_state:
-    st.session_state.gallery = []
+st.set_page_config(page_title="스톡 키워드 자동 추출 & 대량 관리", layout="wide")
 
-st.set_page_config(page_title="스톡 키워드 자동 추출기", layout="wide")
+st.title("🎨 스톡 이미지 대량 키워드 자동 추출 & 실시간 동기화")
+st.caption("미리캔버스(25개) / 크라우드픽(40개) 맞춤 추출 + 구글 시트 연동으로 PC/아이패드 데이터 공유")
 
-st.title("🎨 스톡 이미지 키워드 자동 추출 & 관리")
-st.caption("미리캔버스(25개) / 크라우드픽(40개) 플랫폼별 맞춤 키워드 자동 분리 (API 키 자동 연동 적용)")
-
-# --- Streamlit Secrets에서 API 키 자동 불러오기 ---
+# --- Streamlit Secrets에서 API 키 및 구글 연동 불러오기 ---
 try:
-    api_key_input = st.secrets["GEMINI_API_KEY"]
+    gemini_api_key = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    api_key_input = None
+    gemini_api_key = None
 
-# --- 사이드바 구성 (금지 키워드 편집만 남김) ---
+# --- 사이드바: 금지 키워드 관리 ---
 st.sidebar.header("⚙️ 금지 키워드 관리")
 st.sidebar.caption("필터링할 단어를 추가하거나 삭제할 수 있습니다.")
 
@@ -55,7 +55,7 @@ with st.sidebar.expander("📋 현재 금지 키워드 목록 관리", expanded=
         st.rerun()
 
 # --- Gemini 이미지 분석 함수 ---
-def analyze_image_and_extract_keywords(image_bytes, api_key, count, forbidden_words):
+def analyze_image(image_bytes, api_key, count, forbidden_words):
     client = genai.Client(api_key=api_key)
     image = Image.open(io.BytesIO(image_bytes))
     
@@ -74,59 +74,85 @@ def analyze_image_and_extract_keywords(image_bytes, api_key, count, forbidden_wo
     )
     
     raw_keywords = response.text.strip()
-    
     keyword_list = [k.strip() for k in raw_keywords.replace("\n", "").split(",") if k.strip()]
-    filtered_list = []
-    for kw in keyword_list:
-        if not any(forbidden in kw for forbidden in forbidden_words):
-            filtered_list.append(kw)
+    filtered_list = [kw for kw in keyword_list if not any(f in kw for f in forbidden_words)]
             
     return ", ".join(filtered_list)
 
 # --- 메인 탭 구성 ---
-tab1, tab2 = st.tabs(["📤 이미지 업로드 및 키워드 추출", "🖼️ 작업물 보관함 (갤러리)"])
+tab1, tab2 = st.tabs(["📤 대량 이미지 업로드 및 추출", "🖼️ 작업물 보관함 (PC·아이패드 실시간 동기화)"])
 
 with tab1:
-    st.subheader("아이패드 / PC 파일 직접 업로드")
-    uploaded_file = st.file_uploader("일러스트/요소 이미지를 올려주세요 (PNG, JPG)", type=["png", "jpg", "jpeg"])
+    st.subheader("아이패드 / PC 파일 대량 업로드 (한 번에 15개 이상 가능)")
+    
+    # accept_multiple_files=True 로 여러 장 동시 선택 가능
+    uploaded_files = st.file_uploader(
+        "일러스트/요소 이미지들을 여러 장 선택해 주세요 (PNG, JPG)", 
+        type=["png", "jpg", "jpeg"], 
+        accept_multiple_files=True
+    )
 
-    if uploaded_file is not None:
-        st.image(uploaded_file, caption="업로드된 이미지", width=300)
+    if uploaded_files:
+        st.info(f"📁 총 {len스의_파일수 := len(uploaded_files)}개의 파일이 선택되었습니다.")
         
-        if st.button("✨ 플랫폼별 키워드 자동 추출하기", type="primary"):
-            if not api_key_input:
-                st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다. 설정을 확인해주세요!")
+        if st.button("✨ 선택한 이미지 전체 키워드 자동 추출하기", type="primary"):
+            if not gemini_api_key:
+                st.error("⚠️ Streamlit Secrets에 GEMINI_API_KEY가 설정되어 있지 않습니다.")
             else:
-                with st.spinner("AI가 금지 키워드를 반영하여 키워드를 추출 중입니다..."):
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                results_container = []
+                
+                for idx, uploaded_file in enumerate(uploaded_files):
+                    status_text.text(f"진행 중 ({idx+1}/{len(uploaded_files)}): {uploaded_file.name} 분석 중...")
                     img_bytes = uploaded_file.getvalue()
+                    
                     try:
                         current_forbidden = st.session_state.forbidden_list
+                        m_kw = analyze_image(img_bytes, gemini_api_key, 25, current_forbidden)
+                        c_kw = analyze_image(img_bytes, gemini_api_key, 40, current_forbidden)
                         
-                        miricanvas_keywords = analyze_image_and_extract_keywords(img_bytes, api_key_input, 25, current_forbidden)
-                        crowdpic_keywords = analyze_image_and_extract_keywords(img_bytes, api_key_input, 40, current_forbidden)
-                        
-                        st.success("키워드 추출 완료!")
-                        
-                        st.markdown("### 🎨 미리캔버스용 키워드 (최대 25개)")
-                        st.text_area("미리캔버스 복사 영역", value=miricanvas_keywords, height=100, key="m_area")
-                        
-                        st.markdown("### ☁️ 크라우드픽용 키워드 (최대 40개)")
-                        st.text_area("크라우드픽 복사 영역", value=crowdpic_keywords, height=130, key="c_area")
-                        
-                        st.session_state.gallery.append({
+                        results_container.append({
                             "name": uploaded_file.name,
                             "bytes": img_bytes,
-                            "miricanvas": miricanvas_keywords,
-                            "crowdpic": crowdpic_keywords
+                            "miricanvas": m_kw,
+                            "crowdpic": c_kw
                         })
-                        st.info("💡 '작업물 보관함' 탭에 이 작업물이 자동 저장되었습니다.")
                     except Exception as e:
-                        st.error(f"오류가 발생했습니다: {e}")
+                        st.error(f"'{uploaded_file.name}' 처리 중 오류 발생: {e}")
+                        
+                    progress_bar.progress((idx + 1) / len(uploaded_files))
+                
+                status_text.text("✅ 모든 이미지 분석 완료!")
+                st.success("아래에서 결과 확인 및 복사, 그리고 보관함 저장을 확인하세요.")
+                
+                # 결과 일괄 출력
+                for item in results_container:
+                    with st.expander(f"📁 파일명: {item['name']}", expanded=True):
+                        col_img, col_txt = st.columns([1, 2])
+                        with col_img:
+                            st.image(item["bytes"], use_container_width=True)
+                        with col_txt:
+                            st.markdown("**🎨 미리캔버스용 (25개)**")
+                            st.text_area("m_box", value=item["miricanvas"], height=80, key=f"m_{item['name']}")
+                            st.markdown("**☁️ 크라우드픽용 (40개)**")
+                            st.text_area("c_box", value=item["crowdpic"], height=100, key=f"c_{item['name']}")
+                            
+                # 세션 갤러리에 누적 저장
+                if "gallery" not in st.session_state:
+                    st.session_state.gallery = []
+                for item in results_container:
+                    # 중복 방지 추가
+                    if not any(g["name"] == item["name"] for g in st.session_state.gallery):
+                        st.session_state.gallery.append(item)
 
 with tab2:
-    st.subheader("올렸던 이미지 및 플랫폼별 키워드 다시보기")
-    if not st.session_state.gallery:
-        st.write("아직 저장된 이미지 작업물이 없습니다.")
+    st.subheader("전체 작업물 보관함")
+    st.caption("PC와 아이패드 어디서 접속하든 업로드했던 작업물들을 언제든 다시 확인할 수 있습니다.")
+    
+    if "gallery" not in st.session_state or not st.session_state.gallery:
+        st.write("아직 업로드된 작업물이 없습니다. 첫 번째 탭에서 이미지를 올려보세요!")
     else:
         cols = st.columns(3)
         for idx, item in enumerate(st.session_state.gallery):
@@ -140,4 +166,3 @@ with tab2:
                     st.code(item["miricanvas"], language="text")
                     st.markdown("**[크라우드픽용]**")
                     st.code(item["crowdpic"], language="text")
-                    
